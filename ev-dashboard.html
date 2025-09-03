@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Interactive EV Dashboard</title>
+
+  <!-- Tailwind + Charts -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+
+  <!-- Mapbox GL JS -->
+  <link href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css" rel="stylesheet"/>
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+
+  <style>
+    :root{
+      --bg-light:#f4f7fa;--bg-dark:#1a1b1e;
+      --card-light:#ffffff;--card-dark:#25262b;
+      --text-light:#1a1b1e;--text-dark:#f1f3f5;
+      --text-muted-light:#5c5f66;--text-muted-dark:#909296;
+      --border-light:#e9ecef;--border-dark:#373a40;
+      --accent-blue:#228be6;--regen-green:#40c057;
+    }
+    body{font-family:'Inter',sans-serif}
+    .app-container{width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;background-color:var(--bg-dark)}
+    html.light .app-container{background-color:var(--bg-light)}
+    .dashboard-wrapper{width:100%;max-width:1280px;aspect-ratio:16/9;background-color:var(--bg-dark);color:var(--text-dark);display:flex;flex-direction:column;border-radius:1.5rem;box-shadow:0 25px 50px -12px rgba(0,0,0,0.25);overflow:hidden}
+    html.light .dashboard-wrapper{background-color:var(--bg-light);color:var(--text-light);border:1px solid var(--border-light)}
+    .card{background-color:var(--card-dark);border-radius:1rem;border:1px solid var(--border-dark);overflow:hidden}
+    html.light .card{background-color:var(--card-light);border-color:var(--border-light)}
+    .tab-button.active{background-color:var(--accent-blue);color:white}
+    .mode-button{font-size:.75rem;padding:.5rem .1rem}
+    .mode-button.active-eco{background-color:#2f9e44;color:#fff;border-color:#2f9e44}
+    .mode-button.active-city{background-color:#1971c2;color:#fff;border-color:#1971c2}
+    .mode-button.active-sports{background-color:#d9480f;color:#fff;border-color:#d9480f}
+    .chart-container{position:relative;width:100%;height:100%}
+    .road-background{
+      background:repeating-linear-gradient(#4c4f5a,#4c4f5a 10px,#3c3e47 10px,#3c3e47 20px);
+      background-size:200% 200%;animation:none
+    }
+    html.light .road-background{
+      background:repeating-linear-gradient(#d1d5db,#d1d5db 10px,#e5e7eb 10px,#e5e7eb 20px)
+    }
+    .road-background.is-moving{animation:road-scroll 2s linear infinite}
+    @keyframes road-scroll{0%{background-position:0 0}100%{background-position:-200px 0}}
+    .tpms-ok{color:#868e96} html.light .tpms-ok{color:#495057}
+    .tpms-warn{color:#fab005}
+    .regen-active{color:var(--regen-green)}
+    .modal-backdrop{background-color:rgba(0,0,0,0.5);backdrop-filter:blur(4px)}
+    /* Overflow safety for grid/flex children (prevents pop-out) */
+    .min-h-0{min-height:0}
+    .scroll-smooth{scroll-behavior:smooth}
+  </style>
+</head>
+<body class="overflow-hidden">
+
+<div class="app-container">
+  <div id="app" class="dashboard-wrapper">
+    <!-- Header -->
+    <header class="w-full p-4 flex items-center justify-between flex-shrink-0">
+      <h1 class="text-xl md:text-2xl font-bold text-blue-500">EV Dashboard</h1>
+      <div class="flex items-center gap-3">
+        <!-- Tabs -->
+        <div id="tabs" class="flex items-center bg-gray-200 dark:bg-[#25262b] rounded-lg p-1">
+          <button data-tab="tab1" class="tab-button active px-4 py-2 text-sm rounded-md transition-all">Dashboard</button>
+          <button data-tab="tab2" class="tab-button px-4 py-2 text-sm rounded-md transition-all">Analytics</button>
+          <button data-tab="tab3" class="tab-button px-4 py-2 text-sm rounded-md transition-all">Optimization</button>
+        </div>
+        <!-- State file controls -->
+        <button id="enable-state-file" class="px-3 py-1 text-xs rounded-md bg-blue-600 text-white">Enable State File</button>
+        <button id="load-state-file" class="px-3 py-1 text-xs rounded-md bg-gray-600 text-white">Load State File</button>
+        <!-- Theme -->
+        <div class="flex items-center ml-2">
+          <span class="text-sm mr-2">☀️</span>
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" id="theme-toggle" class="sr-only peer">
+            <div class="w-11 h-6 bg-gray-300 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+          </label>
+          <span class="text-sm ml-2">🌙</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main -->
+    <main class="flex-grow p-4 overflow-hidden">
+      <!-- Tab 1 -->
+      <div id="tab1" class="tab-content h-full grid grid-cols-12 gap-4">
+        <!-- Left Column -->
+        <div class="col-span-3 flex flex-col gap-4 min-h-0">
+          <div class="card p-3">
+            <h3 class="font-semibold mb-2 text-sm">Drive Mode</h3>
+            <div id="mode-selector" class="grid grid-cols-3 gap-2">
+              <button data-mode="Eco" class="mode-button border dark:border-gray-600 rounded-md transition-all active-eco">ECO</button>
+              <button data-mode="City" class="mode-button border dark:border-gray-600 rounded-md transition-all">CITY</button>
+              <button data-mode="Sports" class="mode-button border dark:border-gray-600 rounded-md transition-all">SPORTS</button>
+            </div>
+          </div>
+
+          <div class="card p-3">
+            <h3 class="font-semibold mb-2 text-sm">Trip Info</h3>
+            <div id="trip-info" class="space-y-2 text-xs">
+              <p class="flex justify-between items-center"><span>Odometer:</span> <span id="odometer" class="font-mono font-semibold">0.0 km</span></p>
+              <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-1">
+                  <button id="trip-selector-A" class="px-2 py-0.5 text-xs rounded bg-blue-500 text-white">Trip A</button>
+                  <button id="trip-selector-B" class="px-2 py-0.5 text-xs rounded bg-transparent">Trip B</button>
+                </div>
+                <span id="trip-distance" class="font-mono font-semibold">0.0 km</span>
+                <button id="reset-trip" class="text-xs text-red-400 hover:underline">Reset</button>
+              </div>
+              <p class="flex justify-between items-center pt-1 border-t border-gray-700/50">
+                <span>Power:</span><span id="live-power" class="font-mono font-semibold">0 kW</span>
+              </p>
+              <p class="flex justify-between items-center">
+                <span>Efficiency:</span><span id="live-efficiency" class="font-mono font-semibold">0 Wh/km</span>
+              </p>
+            </div>
+          </div>
+
+          <div id="climate-control" class="card p-3 flex-grow flex flex-col min-h-0">
+            <h3 class="font-semibold mb-2 text-sm">Climate</h3>
+            <div class="flex-grow flex flex-col items-center justify-center space-y-2">
+              <div class="flex items-center justify-between w-full">
+                <p class="text-sm">A/C</p>
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" id="ac-toggle-slider" class="sr-only peer">
+                  <div class="w-11 h-6 bg-gray-200 dark:bg-gray-700 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+              <div class="text-center">
+                <p class="text-3xl font-bold"><span id="ac-temp-label">22</span>°C</p>
+                <p id="ac-status" class="text-xs text-gray-400">OFF</p>
+              </div>
+              <input id="ac-temp-slider" type="range" min="18" max="28" value="22"
+                     class="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer" disabled>
+            </div>
+          </div>
+        </div>
+
+        <!-- Center Column -->
+        <div class="col-span-6 flex flex-col gap-4 min-h-0">
+          <div class="card p-4 flex flex-col h-full min-h-0">
+            <h3 class="font-semibold mb-2">Navigation</h3>
+            <div class="flex-1 min-h-0 rounded-md bg-gray-800">
+              <div id="mapbox-map" class="w-full h-full rounded-md" tabindex="-1"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Column -->
+        <div class="col-span-3 flex flex-col gap-4 min-h-0">
+          <!-- Showcase + Speed -->
+          <div class="card p-4 h-2/5 grid grid-cols-2 gap-2 items-center">
+            <div class="h-full relative rounded-md overflow-hidden">
+              <div id="road-bg" class="road-background absolute inset-0"></div>
+              <img src="https://assets.codepen.io/285131/ev-car-2.png" alt="EV Car"
+                   class="absolute bottom-1 left-1/2 -translate-x-1/2 w-[95%] max-h-full object-contain z-10"
+                   style="filter: drop-shadow(0 10px 8px rgba(0,0,0,0.4));">
+            </div>
+            <div class="h-full flex flex-col items-center justify-center">
+              <div class="chart-container w-full h-full"><canvas id="speed-gauge"></canvas></div>
+            </div>
+          </div>
+
+          <!-- Weather -->
+          <div class="card p-3 h-2/5 flex flex-col">
+            <h3 class="font-semibold mb-1 text-sm">Weather</h3>
+            <div id="weather-container" class="flex-grow flex flex-col justify-between text-xs">
+              <div class="flex items-center space-x-2">
+                <span id="weather-icon" class="text-2xl">--</span>
+                <div>
+                  <p id="weather-location" class="font-semibold">Loading...</p>
+                  <p id="weather-temp" class="text-lg font-semibold">--°C</p>
+                </div>
+              </div>
+              <div class="grid grid-cols-3 gap-1 mt-1">
+                <p>💧 <span id="weather-humidity">--%</span></p>
+                <p>☔ <span id="weather-precip">--%</span></p>
+                <p>💨 <span id="weather-wind">-- km/h</span></p>
+              </div>
+              <div id="forecast-container" class="space-y-0.5 mt-1"></div>
+            </div>
+          </div>
+
+          <!-- Battery -->
+          <div class="card p-3">
+            <h3 class="font-semibold mb-1 text-sm">Battery & Range</h3>
+            <div class="relative w-full h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+              <div id="battery-bar" class="absolute top-0 left-0 h-full bg-gradient-to-r from-green-400 to-emerald-500 transition-all duration-300"></div>
+            </div>
+            <div class="flex justify-between mt-1 text-xs">
+              <div><span id="battery-soc">100%</span></div>
+              <div class="text-right">
+                <span id="est-range" class="font-semibold">450 km</span>
+                <p id="ai-range-display" class="text-xs text-blue-400" title="Based on driving style, temperature, and usage patterns">AI: 445 km</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 2 -->
+      <div id="tab2" class="tab-content hidden h-full grid grid-cols-3 grid-rows-2 gap-4">
+        <div class="card p-4 col-span-1 row-span-2 flex flex-col min-h-0">
+          <h3 class="font-semibold mb-2">Charging Log</h3>
+          <div id="charging-log-container" class="flex-grow overflow-y-auto pr-2">
+            <p class="text-sm text-gray-400 text-center py-8">No charging sessions logged.</p>
+          </div>
+        </div>
+
+        <div class="card p-4 col-span-1 row-span-1 flex flex-col">
+          <h3 class="font-semibold mb-2">Charging Habit Analysis</h3>
+          <div class="chart-container"><canvas id="charging-habit-chart"></canvas></div>
+        </div>
+
+        <div class="card p-4 col-span-1 row-span-1">
+          <h3 class="font-semibold mb-2">Charging Frequency (Today)</h3>
+          <div class="chart-container"><canvas id="charging-freq-chart"></canvas></div>
+        </div>
+
+        <div class="card p-4 col-span-1 row-span-1 flex flex-col items-center justify-center text-center">
+          <h3 class="font-semibold mb-2">Cost Savings vs ICE</h3>
+          <div>
+            <p class="text-4xl font-bold text-green-400">₹<span id="cost-savings">0</span></p>
+            <p class="text-xs text-gray-400">Calculated based on total distance driven.</p>
+          </div>
+          <div class="text-xs mt-4 w-full flex justify-around">
+            <p>EV Cost: ₹2/km</p><p>ICE Cost: ₹5/km</p>
+          </div>
+        </div>
+
+        <div class="card p-4 col-span-1 row-span-1">
+          <h3 class="font-semibold mb-2">Battery & Range</h3>
+          <div class="relative w-full h-4 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+            <div id="battery-bar-tab2" class="absolute top-0 left-0 h-full bg-gradient-to-r from-green-400 to-emerald-500 transition-all duration-300"></div>
+          </div>
+          <div class="flex justify-between mt-2 text-sm">
+            <div><span id="battery-soc-tab2">100%</span></div>
+            <div class="text-right">
+              <span id="est-range-tab2" class="font-semibold">450 km</span>
+              <p id="ai-range-display-tab2" class="text-xs text-blue-400">AI: 445 km</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 3 -->
+      <div id="tab3" class="tab-content hidden h-full grid grid-cols-3 grid-rows-2 gap-4">
+        <div class="card p-4 flex flex-col items-center justify-center">
+          <h3 class="font-semibold mb-2">Eco-Driving Score</h3>
+          <div class="chart-container w-40 h-40"><canvas id="eco-score-gauge"></canvas></div>
+        </div>
+        <div class="card p-4 flex flex-col items-center justify-center">
+          <h3 class="font-semibold mb-2">Green Score</h3>
+          <p class="text-4xl font-bold text-green-400"><span id="carbon-offset">0</span> kg</p>
+          <p class="text-xs text-gray-400 text-center">CO₂ saved vs ICE vehicle</p>
+        </div>
+        <div class="card p-4">
+          <h3 class="font-semibold mb-2">User Profile</h3>
+          <div class="flex items-center space-x-4">
+            <img src="https://placehold.co/64x64/748ffc/ffffff?text=A" alt="User" id="profile-avatar" class="w-16 h-16 rounded-full">
+            <div>
+              <p id="profile-name" class="font-bold">Alex Doe</p>
+              <button id="switch-profile-btn" class="text-xs text-blue-400 hover:underline">Switch Profile</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card p-4 col-span-2">
+          <h3 class="font-semibold mb-2">Battery Health (SOH) Forecast</h3>
+          <div class="chart-container"><canvas id="soh-forecast-chart"></canvas></div>
+        </div>
+
+        <!-- Replaced Voice Assistant -->
+        <div class="card p-4">
+          <h3 class="font-semibold mb-2">Simulation Insights</h3>
+          <div id="insights" class="text-xs grid grid-cols-2 gap-2">
+            <!-- Filled by JS with model outputs / reasons -->
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- Profile Modal -->
+<div id="profile-modal" class="hidden fixed inset-0 z-50 items-center justify-center modal-backdrop">
+  <div class="card w-full max-w-sm p-6 relative">
+    <h2 class="text-lg font-bold mb-4">Switch Profile</h2>
+    <div id="profile-list" class="space-y-2"></div>
+    <div class="mt-4 flex gap-2">
+      <input type="text" id="new-profile-name" class="w-full bg-gray-700 text-sm rounded-md p-2" placeholder="New profile name...">
+      <button id="add-profile-btn" class="px-4 py-2 bg-blue-500 rounded-md text-sm">Add</button>
+    </div>
+    <button id="close-profile-modal" class="absolute top-4 right-4 text-gray-500 hover:text-white">✕</button>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  // ---------------- API & CONFIG ----------------
+  const OPENWEATHER_API_KEY = '1f272f03d38f6051cd1b3402f899c67f'; // <— put your key here
+  const MAPBOX_TOKEN        = 'pk.eyJ1Ijoibm9wcml0cHIiLCJhIjoiY21ldHVhYjcyMDA1eDJtc2h5NGUxbW1wcCJ9.V6v0LYI5NYCF_9MTAC9spw'; // <— pk.**** public token
+  const BENGALURU_LAT = 12.9716, BENGALURU_LON = 77.5946;
+
+  // ---------------- STATE MGMT ----------------
+  let vehicleState = {};
+  const defaultState = {
+    odometer: 0.0, tripA: 0.0, tripB: 0.0, activeTrip: 'A',
+    batterySOC: 100.0, driveMode: 'Eco', acOn: false, acTemp: 22,
+    chargingLogs: [], speed: 0, power: 0, efficiency: 0, ecoScore: 85,
+    batteryCapacity_kWh: 50,
+    baseConsumption: { Eco: 0.111, City: 0.122, Sports: 0.135 },
+    drainConsumption: { Eco: 0.02, City: 0.03, Sports: 0.04 },
+    batteryTemp: 35, motorTemp: 65, inverterTemp: 45, coolantLevel: 95,
+    drivingStyle: 'Eco', lastDrivingEvents: [], alerts: [],
+    tpms: { fl: 35, fr: 35, rl: 36, rr: 35 },
+    profiles: {
+      "Alex Doe": { driveMode: 'Eco', acTemp: 22 },
+      "Ben Smith": { driveMode: 'City', acTemp: 20 },
+      "Chloe Ray": { driveMode: 'Sports', acTemp: 24 },
+    },
+    activeProfile: "Alex Doe",
+    energyThroughput_kWh: 0,        // for SOH
+    cycleCount: 0                   // for SOH
+  };
+  const keysPressed = {};
+  let currentChargingSession = null;
+
+  // File System Access API handles
+  let stateFileHandle = null;
+  let stateFileEnabled = false;
+
+  // ---------------- DOM REFS ----------------
+  const themeToggle = document.getElementById('theme-toggle');
+  const roadBg = document.getElementById('road-bg');
+  const acToggleSlider = document.getElementById('ac-toggle-slider');
+  const odometerEl = document.getElementById('odometer');
+  const tripDistanceEl = document.getElementById('trip-distance');
+  const tripSelectorA = document.getElementById('trip-selector-A');
+  const tripSelectorB = document.getElementById('trip-selector-B');
+  const resetTripBtn = document.getElementById('reset-trip');
+  const modeSelector = document.getElementById('mode-selector');
+  const acTempSlider = document.getElementById('ac-temp-slider');
+  const acTempLabel = document.getElementById('ac-temp-label');
+  const acStatus = document.getElementById('ac-status');
+  const batteryBar = document.getElementById('battery-bar');
+  const batterySocEl = document.getElementById('battery-soc');
+  const estRangeEl = document.getElementById('est-range');
+  const aiRangeDisplay = document.getElementById('ai-range-display');
+  const chargingLogContainer = document.getElementById('charging-log-container');
+  const batteryBarTab2 = document.getElementById('battery-bar-tab2');
+  const batterySocElTab2 = document.getElementById('battery-soc-tab2');
+  const estRangeElTab2 = document.getElementById('est-range-tab2');
+  const aiRangeDisplayTab2 = document.getElementById('ai-range-display-tab2');
+  const costSavingsEl = document.getElementById('cost-savings');
+  const carbonOffsetEl = document.getElementById('carbon-offset');
+  const insightsEl = document.getElementById('insights');
+  // Weather elements
+  const weatherIconEl = document.getElementById('weather-icon');
+  const weatherLocationEl = document.getElementById('weather-location');
+  const weatherTempEl = document.getElementById('weather-temp');
+  const weatherHumidityEl = document.getElementById('weather-humidity');
+  const weatherPrecipEl = document.getElementById('weather-precip');
+  const weatherWindEl = document.getElementById('weather-wind');
+  const forecastContainer = document.getElementById('forecast-container');
+  // Profile modal
+  const profileModal = document.getElementById('profile-modal');
+  const switchProfileBtn = document.getElementById('switch-profile-btn');
+  const closeProfileModalBtn = document.getElementById('close-profile-modal');
+  const profileList = document.getElementById('profile-list');
+  const newProfileNameInput = document.getElementById('new-profile-name');
+  const addProfileBtn = document.getElementById('add-profile-btn');
+  const profileAvatar = document.getElementById('profile-avatar');
+  const profileNameEl = document.getElementById('profile-name');
+  // State file buttons
+  const enableStateFileBtn = document.getElementById('enable-state-file');
+  const loadStateFileBtn = document.getElementById('load-state-file');
+
+  // ---------------- CHARTS ----------------
+  Chart.defaults.color = '#909296';
+  Chart.defaults.font.family = "'Inter', sans-serif";
+  let speedGauge, ecoScoreGauge, sohForecastChart, chargingFreqChart, chargingHabitChart;
+
+  function createCharts(){
+    const gauge = (max, text) => ({
+      type:'doughnut',
+      data:{datasets:[{data:[0,max], backgroundColor:['#228be6','rgba(144,146,150,0.2)'], borderColor:'transparent', borderWidth:0, borderRadius:20, circumference:270, rotation:225}]},
+      options:{responsive:true, maintainAspectRatio:false, cutout:'80%', plugins:{legend:{display:false}, tooltip:{enabled:false}}, animation:{duration:180}},
+      plugins:[{id:'gaugeText', beforeDraw:(chart)=>{const {ctx,width,height}=chart;ctx.save();const fs=(height/100).toFixed(2);ctx.font=`bold ${fs}rem Inter`;ctx.fillStyle=document.documentElement.classList.contains('dark')?'#f1f3f5':'#1a1b1e';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(text,width/2,height/1.5);ctx.restore();}}]
+    });
+    speedGauge = new Chart(document.getElementById('speed-gauge').getContext('2d'), gauge(150,'0 km/h'));
+    ecoScoreGauge = new Chart(document.getElementById('eco-score-gauge').getContext('2d'), gauge(100,'85'));
+    sohForecastChart = new Chart(document.getElementById('soh-forecast-chart').getContext('2d'), {
+      type:'line',
+      data:{labels:[], datasets:[{label:'SOH %', data:[], borderColor:'#228be6', tension:0.25}]},
+      options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{y:{min:80,max:100}, x:{title:{display:true,text:'Odometer (km)'}}}}
+    });
+    chargingFreqChart = new Chart(document.getElementById('charging-freq-chart').getContext('2d'), {
+      type:'bar',
+      data:{labels:['Night','Morning','Afternoon','Evening'], datasets:[{label:'Sessions', data:[0,0,0,0]}]},
+      options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{y:{beginAtZero:true,ticks:{stepSize:1}}, x:{ticks:{font:{size:10}}}}}
+    });
+    chargingHabitChart = new Chart(document.getElementById('charging-habit-chart').getContext('2d'), {
+      type:'radar',
+      data:{labels:['Late Night','Morning','Afternoon','Evening','Weekend'], datasets:[{label:'Charging Likelihood', data:[0,0,0,0,0], backgroundColor:'rgba(34,139,230,0.2)', borderColor:'#228be6', pointBackgroundColor:'#228be6'}]},
+      options:{responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{r:{beginAtZero:true,max:100,ticks:{display:false}}}}
+    });
+  }
+
+  // ---------------- WEATHER ----------------
+  function getWeatherIcon(code){
+    const m={'01d':'☀️','01n':'🌙','02d':'⛅️','02n':'☁️','03d':'☁️','03n':'☁️','04d':'☁️','04n':'☁️','09d':'🌦️','09n':'🌦️','10d':'🌧️','10n':'🌧️','11d':'⛈️','11n':'⛈️','13d':'❄️','13n':'❄️','50d':'🌫️','50n':'🌫️'};return m[code]||'☀️';
+  }
+  async function fetchWeatherData(){
+    if(!OPENWEATHER_API_KEY || OPENWEATHER_API_KEY.includes('YOUR_OPENWEATHER_API_KEY')){ weatherLocationEl.textContent='Weather API key missing'; return; }
+    const key = OPENWEATHER_API_KEY.trim();
+    const base = `lat=${BENGALURU_LAT}&lon=${BENGALURU_LON}&exclude=minutely,hourly,alerts&units=metric&appid=${key}`;
+    const urls=[`https://api.openweathermap.org/data/3.0/onecall?${base}`, `https://api.openweathermap.org/data/2.5/onecall?${base}`];
+    let data=null, err=null;
+    for(const url of urls){ try{ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(`HTTP ${r.status}`); data=await r.json(); break; } catch(e){ err=e; } }
+    if(!data){ weatherLocationEl.textContent='Weather unavailable'; console.error('OpenWeather failed:', err); return; }
+    renderWeatherData(data);
+  }
+  function renderWeatherData(data){
+    weatherIconEl.textContent = getWeatherIcon(data.current.weather[0].icon);
+    weatherLocationEl.textContent = 'Bengaluru';
+    weatherTempEl.textContent = `${Math.round(data.current.temp)}°C`;
+    weatherHumidityEl.textContent = `${data.current.humidity}%`;
+    weatherPrecipEl.textContent = `${Math.round((data.daily?.[0]?.pop||0)*100)}%`;
+    weatherWindEl.textContent = `${Math.round((data.current.wind_speed||0)*3.6)} km/h`;
+    let html='';
+    (data.daily||[]).slice(1,4).forEach(d=>{
+      const day=new Date(d.dt*1000).toLocaleDateString('en-US',{weekday:'short'});
+      html+=`<p class="flex justify-between"><span>${day}</span><span>${Math.round(d.temp.max)}°C ${getWeatherIcon(d.weather[0].icon)}</span></p>`;
+    });
+    forecastContainer.innerHTML = html;
+  }
+
+  // ---------------- STATE PERSISTENCE ----------------
+  function saveStateLocal(){ try{ localStorage.setItem('evDashboardState', JSON.stringify(vehicleState)); } catch(e){ console.error(e); } }
+  function loadStateLocal(){ try{ const s=localStorage.getItem('evDashboardState'); vehicleState = s ? JSON.parse(s) : structuredClone(defaultState); } catch(e){ vehicleState = structuredClone(defaultState); } }
+
+  async function enableStateFile(){
+    if(!window.showSaveFilePicker){ alert('Your browser does not support file access. Falling back to localStorage.'); return; }
+    try{
+      stateFileHandle = await showSaveFilePicker({
+        suggestedName:'ev_state.json',
+        types:[{description:'JSON', accept:{'application/json':['.json']}}]
+      });
+      stateFileEnabled = true;
+      await writeStateFile(); // write immediately
+      enableStateFileBtn.textContent = 'State File Enabled';
+      enableStateFileBtn.classList.remove('bg-blue-600'); enableStateFileBtn.classList.add('bg-green-600');
+    }catch(e){ console.warn('State file not enabled:', e); }
+  }
+  async function writeStateFile(){
+    if(!stateFileEnabled || !stateFileHandle) return;
+    try{
+      const writable = await stateFileHandle.createWritable();
+      await writable.write(new Blob([JSON.stringify(vehicleState)], {type:'application/json'}));
+      await writable.close();
+    }catch(e){ console.error('Write state failed', e); }
+  }
+  async function loadStateFromFile(){
+    if(!window.showOpenFilePicker){ alert('Your browser does not support file access. Use Enable State File or rely on localStorage.'); return; }
+    try{
+      const [handle] = await showOpenFilePicker({ types:[{description:'JSON', accept:{'application/json':['.json']}}] });
+      const file = await handle.getFile();
+      const text = await file.text();
+      const data = JSON.parse(text);
+      vehicleState = Object.assign(structuredClone(defaultState), data);
+      stateFileHandle = handle; stateFileEnabled = true;
+      enableStateFileBtn.textContent = 'State File Enabled';
+      enableStateFileBtn.classList.remove('bg-blue-600'); enableStateFileBtn.classList.add('bg-green-600');
+      renderAll();
+    }catch(e){ console.error('Load state file error', e); }
+  }
+  // periodic disk + local backups
+  setInterval(()=>{ saveStateLocal(); writeStateFile(); }, 200);
+  window.addEventListener('beforeunload', ()=>{ saveStateLocal(); });
+
+  // ---------------- MAPBOX ----------------
+  let map = null;
+  function initMap(){
+    const mapEl = document.getElementById('mapbox-map');
+    if(!MAPBOX_TOKEN || MAPBOX_TOKEN.includes('YOUR_MAPBOX_PUBLIC_TOKEN')){ mapEl.innerHTML='<p class="text-sm text-red-400 p-3">Mapbox token missing</p>'; return; }
+    if(!window.mapboxgl){ mapEl.innerHTML='<p class="text-sm text-red-400 p-3">Mapbox GL failed to load</p>'; return; }
+    const ensureSize = ()=> {
+      const r = mapEl.getBoundingClientRect();
+      if(r.width<10 || r.height<10){ requestAnimationFrame(ensureSize); return; }
+      mapboxgl.accessToken = MAPBOX_TOKEN.trim();
+      map = new mapboxgl.Map({
+        container: 'mapbox-map',
+        style: 'mapbox://styles/mapbox/streets-v12',
+        center: [BENGALURU_LON, BENGALURU_LAT],
+        zoom: 11
+      });
+      map.addControl(new mapboxgl.NavigationControl(), 'top-right');
+      map.on('load', ()=>{
+        // simple visible route
+        const route = { type:'Feature', geometry:{ type:'LineString', coordinates:[[77.585,12.975],[77.600,12.972],[77.615,12.968],[77.630,12.960]] } };
+        map.addSource('sim-route', {type:'geojson', data:route});
+        map.addLayer({ id:'sim-route-line', type:'line', source:'sim-route', paint:{'line-width':4,'line-color':'#228be6'} });
+        map.resize();
+      });
+    };
+    ensureSize();
+    document.querySelectorAll('.tab-button').forEach(btn=>{
+      btn.addEventListener('click', (e)=>{ if(e.target.dataset.tab==='tab1' && map){ setTimeout(()=>map.resize(), 80); } });
+    });
+  }
+
+  // ---------------- ML MODELS (v2 – clearer & stronger) ----------------
+  // 1) Range Regression + EMA/Kalman smoothing
+  const rangeModel = {
+    ema:null, alpha:0.25, // EMA on predicted range
+    kalman:{q:1e-2, r:6, x:450, p:1}, // very light 1D filter
+    predict(baseRange){
+      // Multi-factor linear regression-ish:
+      const style = {Aggressive:0.85, Normal:0.95, Eco:1.02}[vehicleState.drivingStyle]||1.0;
+      const temp = 1.0 - Math.min(0.25, Math.abs(22 - vehicleState.batteryTemp)*0.01);
+      const speed = vehicleState.speed>80 ? 0.93 : vehicleState.speed>60 ? 0.96 : 1.0;
+      const acPenalty = vehicleState.acOn ? (1 - (0.08 + Math.abs(22 - vehicleState.acTemp)*0.008)) : 1.0;
+      let pred = baseRange * style * temp * speed * acPenalty;
+
+      // EMA smoothing
+      this.ema = this.ema==null ? pred : this.ema + this.alpha*(pred - this.ema);
+
+      // Kalman update
+      const k = this.kalman; // predict
+      k.p = k.p + k.q;
+      const S = k.p + k.r;
+      const K = k.p / S;
+      k.x = k.x + K * (this.ema - k.x);
+      k.p = (1 - K) * k.p;
+      return {raw:pred, ema:this.ema, kalman:k.x};
+    }
+  };
+
+  // 2) Driving Style: incremental cluster on features (accel variance, braking rate)
+  const styleModel = {
+    buffer:[],
+    pushEvent(deltaV){ this.buffer.push(deltaV); if(this.buffer.length>100) this.buffer.shift(); },
+    classify(){
+      if(this.buffer.length<10) return vehicleState.drivingStyle;
+      const mean = this.buffer.reduce((a,b)=>a+b,0)/this.buffer.length;
+      const variance = this.buffer.reduce((a,b)=>a+(b-mean)**2,0)/this.buffer.length;
+      const hardBrakes = this.buffer.filter(v=>v<-1.8).length / this.buffer.length;
+      const score = variance*1.2 + hardBrakes*2.5 + (vehicleState.speed>80?0.8:0);
+      if(score>2.0) return 'Aggressive';
+      if(score<0.8) return 'Eco';
+      return 'Normal';
+    }
+  };
+
+  // 3) Predictive Maintenance: EWMA baselines + z-score anomalies
+  const maintModel = {
+    base:{batteryTemp:35, inverterTemp:45, coolantLevel:95, tire:35}, beta:0.05,
+    updateAndDetect(){
+      const A=[];
+      const upd=(key, val, warn, crit)=>{
+        this.base[key] = (1-this.beta)*this.base[key] + this.beta*val;
+        const z = (val - this.base[key]) / (key==='coolantLevel'? 5 : 4);
+        if((key!=='coolantLevel' && z>2.2) || (key==='coolantLevel' && z<-2.2)){ A.push({type:'warning', msg:`${key} deviates`}); }
+        if((key!=='coolantLevel' && val>crit) || (key==='coolantLevel' && val<warn)){ A.push({type:'error', msg:`${key} critical`}); }
+      };
+      upd('batteryTemp', vehicleState.batteryTemp, 85, 60);
+      upd('inverterTemp', vehicleState.inverterTemp, 90, 85);
+      upd('coolantLevel', vehicleState.coolantLevel, 75, 60);
+      const lowTire = Object.values(vehicleState.tpms).some(p=>p<32);
+      if(lowTire) A.push({type:'warning', msg:'Low tire pressure'});
+      vehicleState.alerts = A;
+    }
+  };
+
+  // 4) Smart Charging: rank by distance, price, power, SOC & time-of-day
+  function smartChargingRecommendation(){
+    const hour = new Date().getHours();
+    const peak = (hour>=18 && hour<=22);
+    const stations = [
+      { name:'SuperCharge', dist:2.1, cost: peak?24:20, speed:150 },
+      { name:'EcoCharge',   dist:5.2, cost:15,        speed: 50 },
+      { name:'CityPark',    dist:1.0, cost:25,        speed: 22 }
+    ];
+    const soc=vehicleState.batterySOC;
+    const scores=stations.map(s=>{
+      const distScore = 1/(1+s.dist);
+      const priceScore = 1/(1+s.cost);
+      const powerScore = Math.min(1, s.speed/150);
+      const socWeight = soc<30?1.2: soc<50?1.0:0.7;
+      return (distScore*0.35 + priceScore*0.25 + powerScore*0.40)*socWeight;
+    });
+    const idx = scores.indexOf(Math.max(...scores));
+    return stations[idx];
+  }
+
+  // 5) SOH forecast: Holt linear trend on cycle-based degradation
+  const sohModel = {
+    level:100, trend:-0.002, gamma:0.05, lambda:0.00002, // tuned for slow decline
+    update(throughput_kWh){
+      // level update (approx) and trend drift with throughput
+      this.level += this.trend;
+      this.trend  += -this.lambda * throughput_kWh;
+      if(this.level<80) this.level=80;
+      return this.level;
+    },
+    forecastSeries(startOdo){
+      const labels=[], data=[];
+      for(let i=0;i<=5;i++){
+        const odo = startOdo + i*20000;
+        const future = Math.max(80, this.level + this.trend*(i*10));
+        labels.push(odo.toFixed(0)); data.push(future);
+      }
+      return {labels,data};
+    }
+  };
+
+  // ---------------- CHARGING LOGIC ----------------
+  function startCharging(){
+    if(vehicleState.isCharging || vehicleState.speed>1) return;
+    vehicleState.isCharging = true;
+    currentChargingSession = { id:`log_${Date.now()}`, startTime:new Date(), startSOC:vehicleState.batterySOC };
+  }
+  function stopCharging(){
+    if(!vehicleState.isCharging || !currentChargingSession) return;
+    vehicleState.isCharging = false;
+    currentChargingSession.endTime = new Date();
+    currentChargingSession.endSOC = vehicleState.batterySOC;
+    currentChargingSession.durationMinutes = ((currentChargingSession.endTime - currentChargingSession.startTime)/60000).toFixed(1);
+    const socGained = currentChargingSession.endSOC - currentChargingSession.startSOC;
+    currentChargingSession.energyAdded = ((socGained/100)*vehicleState.batteryCapacity_kWh).toFixed(2);
+    if(parseFloat(currentChargingSession.durationMinutes)>0){
+      vehicleState.chargingLogs.unshift(currentChargingSession);
+      if(vehicleState.chargingLogs.length>20) vehicleState.chargingLogs.pop();
+    }
+    currentChargingSession=null;
+    renderChargingLogs();
+  }
+
+  // ---------------- EVENTS (fixed arrow/C key + prevent scroll) ----------------
+  function setupEventListeners(){
+    // Tabs & theme
+    document.querySelectorAll('.tab-button').forEach(btn=>{
+      btn.addEventListener('click', (e)=>{
+        document.querySelectorAll('.tab-button').forEach(b=>b.classList.remove('active'));
+        e.target.classList.add('active');
+        document.querySelectorAll('.tab-content').forEach(c=>c.id === e.target.dataset.tab ? c.classList.remove('hidden') : c.classList.add('hidden'));
+        if(e.target.dataset.tab==='tab1' && map) setTimeout(()=>map.resize(), 60);
+      });
+    });
+    themeToggle.addEventListener('change', ()=>{
+      document.documentElement.classList.toggle('light');
+      document.documentElement.classList.toggle('dark');
+      localStorage.setItem('theme', document.documentElement.classList.contains('dark') ? 'dark':'light');
+    });
+
+    // Keyboard
+    window.addEventListener('keydown', (e)=>{
+      const tag = (e.target.tagName||'').toLowerCase();
+      if(tag==='input' || tag==='textarea' || e.target.isContentEditable) return;
+      if(e.key==='ArrowUp' || e.key==='ArrowDown'){ e.preventDefault(); keysPressed[e.key]=true; }
+      if((e.key==='c' || e.key==='C') && !e.repeat){ // toggle on single press
+        e.preventDefault();
+        if(vehicleState.isCharging) stopCharging(); else startCharging();
+      }
+    });
+    window.addEventListener('keyup', (e)=>{
+      if(e.key==='ArrowUp' || e.key==='ArrowDown'){ keysPressed[e.key]=false; }
+    });
+
+    // Drive mode & climate
+    modeSelector.addEventListener('click', (e)=>{ if(e.target.tagName==='BUTTON'){ vehicleState.driveMode=e.target.dataset.mode; renderModeButtons(); } });
+    acToggleSlider.addEventListener('change', (e)=>{ vehicleState.acOn=e.target.checked; acTempSlider.disabled=!vehicleState.acOn; });
+    acTempSlider.addEventListener('input', ()=>{ vehicleState.acTemp=parseInt(acTempSlider.value); });
+
+    // Trip selectors
+    tripSelectorA.addEventListener('click', ()=>{ vehicleState.activeTrip='A'; renderTripSelectors(); });
+    tripSelectorB.addEventListener('click', ()=>{ vehicleState.activeTrip='B'; renderTripSelectors(); });
+    resetTripBtn.addEventListener('click', ()=>{ if(vehicleState.activeTrip==='A') vehicleState.tripA=0; else vehicleState.tripB=0; });
+
+    // Charging log deletion
+    chargingLogContainer.addEventListener('click', (e)=>{
+      if(e.target.classList.contains('delete-log-btn')){
+        const id=e.target.dataset.id;
+        vehicleState.chargingLogs = vehicleState.chargingLogs.filter(l=>l.id!==id);
+        renderChargingLogs();
+      }
+    });
+
+    // Profiles
+    switchProfileBtn.addEventListener('click', ()=>{
+      renderProfilesModal();
+      profileModal.classList.remove('hidden'); profileModal.classList.add('flex');
+    });
+    closeProfileModalBtn.addEventListener('click', ()=>{ profileModal.classList.add('hidden'); profileModal.classList.remove('flex'); });
+    addProfileBtn.addEventListener('click', ()=>{
+      const name=newProfileNameInput.value.trim(); if(!name) return;
+      vehicleState.profiles[name]={driveMode:'Eco', acTemp:22}; newProfileNameInput.value='';
+      renderProfilesModal();
+    });
+
+    // State file buttons
+    enableStateFileBtn.addEventListener('click', enableStateFile);
+    loadStateFileBtn.addEventListener('click', loadStateFromFile);
+  }
+
+  function renderProfilesModal(){
+    profileList.innerHTML = Object.keys(vehicleState.profiles).map(name=>`
+      <div class="flex items-center justify-between bg-black/20 rounded-md p-2">
+        <span>${name}</span>
+        <button class="text-xs px-2 py-1 rounded bg-blue-500 text-white" data-name="${name}">Use</button>
+      </div>`).join('');
+    profileList.querySelectorAll('button').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const name = btn.dataset.name;
+        vehicleState.activeProfile=name;
+        const p=vehicleState.profiles[name];
+        vehicleState.driveMode=p.driveMode; vehicleState.acTemp=p.acTemp;
+        profileNameEl.textContent=name;
+        profileModal.classList.add('hidden'); profileModal.classList.remove('flex');
+        renderModeButtons(); renderDashboard();
+      });
+    });
+  }
+
+  // ---------------- SIMULATION ----------------
+  function updateSimulation(){
+    if(vehicleState.isCharging){
+      // ~45kW -> SOC rate scaled to pack size
+      vehicleState.batterySOC = Math.min(100, vehicleState.batterySOC + 0.018);
+      vehicleState.inverterTemp = Math.max(35, vehicleState.inverterTemp - 0.1);
+    }else{
+      const maxSpeed = { Eco:45, City:60, Sports:100 }[vehicleState.driveMode];
+      let accel = 0;
+      if(keysPressed['ArrowUp']) accel += 1.20;
+      if(keysPressed['ArrowDown']) accel -= 2.50;
+
+      const last = vehicleState.speed;
+      vehicleState.speed += accel;
+      vehicleState.speed *= 0.988; // drag
+      vehicleState.speed = Math.max(0, Math.min(maxSpeed, vehicleState.speed));
+
+      const dV = vehicleState.speed - last;
+      if(Math.abs(dV) > 0.2) styleModel.pushEvent(dV);
+
+      const distanceThisTick_m = (vehicleState.speed * 1000 / 3600) * 0.05; // 50ms tick
+      vehicleState.odometer += distanceThisTick_m / 1000;
+      if(vehicleState.activeTrip==='A') vehicleState.tripA += distanceThisTick_m/1000; else vehicleState.tripB += distanceThisTick_m/1000;
+
+      vehicleState.power = vehicleState.speed>0 ? vehicleState.drainConsumption[vehicleState.driveMode]*vehicleState.speed*30 : 0;
+      vehicleState.efficiency = vehicleState.speed>1 ? (vehicleState.power*1000)/vehicleState.speed : 0;
+
+      const acFactor = vehicleState.acOn ? (1 + (0.1 + Math.abs(22 - vehicleState.acTemp)*0.01)) : 1;
+      const consumption_kWh_per_km = vehicleState.drainConsumption[vehicleState.driveMode]*acFactor;
+      const energyConsumed_kWh = (distanceThisTick_m/1000) * consumption_kWh_per_km;
+      vehicleState.energyThroughput_kWh += energyConsumed_kWh;
+      vehicleState.batterySOC -= (energyConsumed_kWh / vehicleState.batteryCapacity_kWh)*100;
+
+      vehicleState.batteryTemp += (vehicleState.speed/maxSpeed*0.12) - 0.04;
+      vehicleState.batteryTemp = Math.max(20, Math.min(65, vehicleState.batteryTemp));
+      vehicleState.inverterTemp = 35 + vehicleState.power*0.4;
+      vehicleState.coolantLevel -= 0.00008;
+      vehicleState.tpms.fl -= (Math.random()-0.49)*0.01;
+      vehicleState.tpms.fr -= (Math.random()-0.49)*0.01;
+    }
+
+    renderDashboard();
+  }
+
+  // ---------------- RENDER ----------------
+  function renderDashboard(){
+    odometerEl.textContent = `${vehicleState.odometer.toFixed(1)} km`;
+    tripDistanceEl.textContent = `${(vehicleState.activeTrip==='A'?vehicleState.tripA:vehicleState.tripB).toFixed(1)} km`;
+
+    // Range calc + ML
+    const baseRange = vehicleState.batterySOC/100 * (vehicleState.batteryCapacity_kWh / vehicleState.baseConsumption[vehicleState.driveMode]);
+    const pred = rangeModel.predict(baseRange);
+    const displayRange = pred.kalman;
+    estRangeEl.textContent = `${displayRange.toFixed(0)} km`;
+    aiRangeDisplay.textContent = `AI: ${pred.ema.toFixed(0)}–${pred.kalman.toFixed(0)} km`;
+
+    batteryBar.style.width = `${vehicleState.batterySOC}%`;
+    batterySocEl.textContent = `${vehicleState.batterySOC.toFixed(1)}%`;
+
+    if(batteryBarTab2){
+      batteryBarTab2.style.width = `${vehicleState.batterySOC}%`;
+      batterySocElTab2.textContent = `${vehicleState.batterySOC.toFixed(1)}%`;
+      document.getElementById('est-range-tab2').textContent = `${displayRange.toFixed(0)} km`;
+      document.getElementById('ai-range-display-tab2').textContent = `AI: ${pred.ema.toFixed(0)}–${pred.kalman.toFixed(0)} km`;
+    }
+
+    const speed = Math.round(vehicleState.speed);
+    speedGauge.config.plugins[0].beforeDraw = (chart)=>{
+      const {ctx,width,height}=chart; ctx.save();
+      const fs=(height/100).toFixed(2); ctx.font=`bold ${fs}rem Inter`;
+      ctx.fillStyle = document.documentElement.classList.contains('dark')?'#f1f3f5':'#1a1b1e';
+      ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(`${speed} km/h`, width/2, height/1.5); ctx.restore();
+    };
+    speedGauge.data.datasets[0].data = [speed, 150-speed];
+    speedGauge.data.datasets[0].backgroundColor[0] = speed<45 ? '#2f9e44' : (speed<65 ? '#1971c2' : '#d9480f');
+    speedGauge.update('none');
+
+    acStatus.textContent = vehicleState.acOn ? 'ON':'OFF';
+    acTempLabel.textContent = vehicleState.acTemp;
+    acToggleSlider.checked = vehicleState.acOn;
+    acTempSlider.disabled = !vehicleState.acOn;
+
+    if(vehicleState.speed>1) roadBg.classList.add('is-moving'); else roadBg.classList.remove('is-moving');
+
+    const style = styleModel.classify();
+    vehicleState.drivingStyle = style;
+
+    // Maintenance alerts
+    maintModel.updateAndDetect();
+    renderAlerts();
+
+    const totalSavings = (5-2)*vehicleState.odometer;
+    costSavingsEl.textContent = totalSavings.toFixed(0);
+    if(carbonOffsetEl) carbonOffsetEl.textContent = ((vehicleState.odometer*120)/1000).toFixed(1);
+
+    // Insights panel
+    const bestStation = smartChargingRecommendation();
+    insightsEl.innerHTML = `
+      <div class="p-2 rounded bg-black/20">
+        <p class="font-semibold text-blue-300 mb-1">Range Model</p>
+        <p>Base: ${baseRange.toFixed(0)} km</p>
+        <p>EMA: ${pred.ema.toFixed(0)} km</p>
+        <p>Kalman: ${pred.kalman.toFixed(0)} km</p>
+      </div>
+      <div class="p-2 rounded bg-black/20">
+        <p class="font-semibold text-green-300 mb-1">Driving Style</p>
+        <p>Current: <span class="${style==='Aggressive'?'text-red-400':(style==='Eco'?'text-green-400':'text-yellow-300')}">${style}</span></p>
+        <p>Tip: keep accel smooth to improve range.</p>
+      </div>
+      <div class="p-2 rounded bg-black/20">
+        <p class="font-semibold text-amber-300 mb-1">Predictive Maintenance</p>
+        <p>${vehicleState.alerts.length? vehicleState.alerts.map(a=>a.msg).join(', ') : 'Nominal'}</p>
+      </div>
+      <div class="p-2 rounded bg-black/20">
+        <p class="font-semibold text-purple-300 mb-1">Charge Recommendation</p>
+        <p>${bestStation.name} • ${bestStation.dist} km • ₹${bestStation.cost}/kWh • ${bestStation.speed}kW</p>
+      </div>
+    `;
+
+    // Update SOH chart periodically from model baseline
+    const {labels,data} = sohModel.forecastSeries(vehicleState.odometer);
+    sohForecastChart.data.labels = labels;
+    sohForecastChart.data.datasets[0].data = data;
+    sohForecastChart.update('none');
+  }
+
+  function renderAlerts(){
+    // simple textual; could be extended to a list UI
+  }
+
+  function renderChargingFrequencyChart(){
+    const today = new Date().toLocaleDateString();
+    const todayLogs = vehicleState.chargingLogs.filter(l=> new Date(l.startTime).toLocaleDateString()===today);
+    const freq=[0,0,0,0];
+    todayLogs.forEach(l=>{
+      const h=new Date(l.startTime).getHours();
+      if(h<6)freq[0]++; else if(h<12)freq[1]++; else if(h<18)freq[2]++; else freq[3]++;
+    });
+    chargingFreqChart.data.datasets[0].data = freq;
+    chargingFreqChart.update('none');
+  }
+
+  function renderModeButtons(){
+    document.querySelectorAll('.mode-button').forEach(btn=>{
+      btn.classList.remove('active-eco','active-city','active-sports');
+      if(btn.dataset.mode===vehicleState.driveMode) btn.classList.add(`active-${vehicleState.driveMode.toLowerCase()}`);
+    });
+  }
+  function renderTripSelectors(){
+    if(vehicleState.activeTrip==='A'){
+      tripSelectorA.classList.add('bg-blue-500','text-white'); tripSelectorA.classList.remove('bg-transparent');
+      tripSelectorB.classList.remove('bg-blue-500','text-white'); tripSelectorB.classList.add('bg-transparent');
+    }else{
+      tripSelectorB.classList.add('bg-blue-500','text-white'); tripSelectorB.classList.remove('bg-transparent');
+      tripSelectorA.classList.remove('bg-blue-500','text-white'); tripSelectorA.classList.add('bg-transparent');
+    }
+  }
+  function renderChargingLogs(){
+    if(!vehicleState.chargingLogs?.length){
+      chargingLogContainer.innerHTML = `<p class="text-sm text-gray-400 text-center py-8">No charging sessions logged.</p>`;
+    }else{
+      chargingLogContainer.innerHTML = vehicleState.chargingLogs.map(log=>`
+        <div class="text-xs p-2 mb-2 bg-black/10 dark:bg-black/20 rounded-lg">
+          <div class="flex justify-between items-center">
+            <p class="font-bold">${new Date(log.startTime).toLocaleDateString()}</p>
+            <button data-id="${log.id}" class="delete-log-btn text-red-400 hover:text-red-600 font-bold">×</button>
+          </div>
+          <p>Duration: ${log.durationMinutes} min</p>
+          <p>Energy: ${log.energyAdded} kWh</p>
+          <p>SOC: ${Number(log.startSOC).toFixed(1)}% → ${Number(log.endSOC).toFixed(1)}%</p>
+        </div>`).join('');
+    }
+    renderChargingFrequencyChart();
+    ml_chargingHabitAnalyzer();
+  }
+
+  // existing analyzer
+  function ml_chargingHabitAnalyzer(){
+    if(!chargingHabitChart) return;
+    const habits={ 'Late Night':0,'Morning':0,'Afternoon':0,'Evening':0,'Weekend':0 };
+    const total=vehicleState.chargingLogs.length;
+    if(!total){ chargingHabitChart.data.datasets[0].data=[0,0,0,0,0]; chargingHabitChart.update('none'); return; }
+    vehicleState.chargingLogs.forEach(l=>{
+      const d=new Date(l.startTime), h=d.getHours(), day=d.getDay();
+      if(h<6)habits['Late Night']++; else if(h<12)habits['Morning']++; else if(h<18)habits['Afternoon']++; else habits['Evening']++;
+      if(day===0||day===6) habits['Weekend']++;
+    });
+    chargingHabitChart.data.datasets[0].data = [
+      habits['Late Night']/total*100, habits['Morning']/total*100,
+      habits['Afternoon']/total*100, habits['Evening']/total*100,
+      habits['Weekend']/total*100
+    ];
+    chargingHabitChart.update('none');
+  }
+
+  // ---------------- INIT ----------------
+  function renderAll(){
+    renderDashboard(); renderModeButtons(); renderTripSelectors(); renderChargingLogs();
+  }
+  function loadState(){ loadStateLocal(); }
+  loadState();
+  createCharts();
+  setupEventListeners();
+  fetchWeatherData();
+  renderAll();
+  initMap();
+
+  // theme init
+  if(localStorage.getItem('theme')==='light'){
+    themeToggle.checked=false; document.documentElement.classList.remove('dark'); document.documentElement.classList.add('light');
+  }else{ themeToggle.checked=true; }
+
+  // simulation tick
+  setInterval(updateSimulation, 50);
+  // periodic ML side updates + SOH level drift
+  setInterval(()=>{
+    // SOH integrate on energy throughput (approx)
+    const delta = vehicleState.energyThroughput_kWh; vehicleState.energyThroughput_kWh = 0;
+    sohModel.update(delta);
+  }, 1000);
+});
+
+// small helper for deep clone
+function structuredClone(obj){ return JSON.parse(JSON.stringify(obj)); }
+</script>
+</body>
+</html>
